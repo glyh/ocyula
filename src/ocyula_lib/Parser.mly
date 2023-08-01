@@ -28,7 +28,7 @@ let un_op_to_str = function
 %token <string> STRING
 %token <string> IDENT
 %token <string> CALL // this is identifier followed by a LBRACKET, because disambiguiate we need this
-%token <string> T_UPDATE_MATCH
+%token <string> T_UPDATE_MATCH // this is identifier followed by a match operator, we also need it for disambiguiate.
 %token <string> LABEL
 
 %token LPAREN
@@ -133,7 +133,7 @@ exp2:
   // above rule conflicts with binary/unary operation
   | LPAREN first=exp COMMA l=separated_nonempty_list(COMMA, exp) RPAREN { Tuple(first :: l) }
   | LBRACKET l=separated_list(COMMA, exp) RBRACKET { List(l) }
-  |id=CALL l=separated_list(COMMA, exp) RPAREN { Call(id, l) }
+  | id=CALL l=separated_list(COMMA, exp) RPAREN { Call(id, l) }
   | LPAREN e=exp RPAREN {e}
   | a=atom { Atom(a) }
   | id=ident { Val(id) }
