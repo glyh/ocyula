@@ -1,14 +1,10 @@
+## Ocyula 
+An experimental compiler for Yula that generates Elixir code, written in Ocaml. This exists for the purpose of justifying the the syntax of Yula.
 
-
-
-
-# ocyula
-
-This is the description
-of the ocyula OCaml project
-
-
-* Website: Not yet specified
-* General Documentation: Not yet specified
-* API Documentation: Not yet specified
-* Sources: Not yet specified
+## Building & Running
+```sh
+git clone git@github.com:glyh/ocyula.git
+cd ocyula
+drom build
+echo "a = 1\nIO.puts(a)" | drom run
+```
