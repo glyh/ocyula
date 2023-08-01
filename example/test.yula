@@ -1,0 +1,5 @@
+# vim: set syntax=ruby:
+
+a = 1
+a += 1
+IO.puts(a)
