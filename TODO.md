@@ -1,0 +1,3 @@
+- Finish HM Type Checker
+- Finish Codegen backend
+- Implement Macro System
