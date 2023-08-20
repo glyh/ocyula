@@ -3,23 +3,23 @@ open Ast
 
 let bin_op_to_str ( op : bin_operator) =
    match op with 
-   | EQ -> "=="
-   | NE -> "!="
-   | LE -> "<="
-   | LT -> "<"
-   | GE -> ">="
-   | GT -> ">"
-   | ADD -> "+"
-   | SUB -> "-"
-   | MUL -> "*"
-   | DIV -> "/"
-   | AND -> "and"
-   | OR -> "or"
-   | AS -> "as"
-   | MATCH -> "="
+   | EQ -> "_eq"
+   | NE -> "_ne"
+   | LE -> "_le"
+   | LT -> "_lt"
+   | GE -> "_ge"
+   | GT -> "_gt"
+   | ADD -> "_add"
+   | SUB -> "_sub"
+   | MUL -> "_mul"
+   | DIV -> "_div"
+   | AND -> "_and"
+   | OR -> "_or"
+   | AS -> "_as"
+   | MATCH -> "!match"
 
 let un_op_to_str = function
-   | NOT -> "not"
+   | NOT -> "_not"
 %}
 
 %token <int> INT_CONSTANT
@@ -30,6 +30,7 @@ let un_op_to_str = function
 %token <string> CALL // this is identifier followed by a LBRACKET, because disambiguiate we need this
 %token <string> T_UPDATE_MATCH // this is identifier followed by a match operator, we also need it for disambiguiate.
 %token <string> LABEL
+%token <string> PIN_IDENT
 
 %token LPAREN
 %token RPAREN
@@ -100,7 +101,12 @@ program:
 exp: 
   | IF test=exp _then=no_end_terminated_exps ELSE _else=end_terminated_exps { If(test, _then, _else) }
   | CASE matched=exp body=list(case_param) END { Case(matched, body) }
-  | FUNCTION name=option(ident) LPAREN args=separated_list(COMMA, ident) RPAREN body=end_terminated_exps { Lam(name, args, body) }
+  | FUNCTION LPAREN args=separated_list(COMMA, ident) RPAREN body=end_terminated_exps { 
+    Lam(args, body)
+  }
+  | FUNCTION name=ident LPAREN args=separated_list(COMMA, ident) RPAREN body=end_terminated_exps { 
+    Call(bin_op_to_str(MATCH), [Val(name); Lam(args, body)])
+  }
   | DO exps=end_terminated_exps { Seq(exps) }
   | exp1 { $1 }
 
@@ -138,6 +144,7 @@ exp2:
   | a=atom { Atom(a) }
   | id=ident { Val(id) }
   | LPAREN RPAREN { Tuple([]) }
+  | pinned=PIN_IDENT { Call("pin", [Val(pinned)]) }
 
 ident:
   | id=IDENT { id }

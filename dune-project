@@ -29,6 +29,8 @@
  (description "This is the description\nof the ocyula OCaml project\n")
  (depends
    (ocaml (>= 4.07.0))
+   (ppx_deriving (and ( >= 5.2 )( < 5.3 )))
+   (containers-data (and ( >= 3.12 )( < 3.13 )))
    ppx_inline_test
    ppx_expect
    odoc

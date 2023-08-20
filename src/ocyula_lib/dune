@@ -4,13 +4,13 @@
   (name ocyula_lib)
   (public_name ocyula_lib)
   (wrapped true)
-  (libraries  )
-  
+  (libraries ppx_deriving containers-data )
+  (preprocess (pps ppx_deriving.show))
   
   )
 
-(menhir (modules Parser))
 (ocamllex Lexer)
+(menhir (modules Parser))
 
 (rule
     (targets version.ml)

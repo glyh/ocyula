@@ -5,7 +5,7 @@ version:0.8.0
 
 # hash of toml configuration files
 # used for generation of all files
-e17c7da0a372075751daaf1b45a235c5:.
+a31031bb20421e418583fceb014a3052:.
 # end context for .
 
 # begin context for .github/workflows/workflow.yml
@@ -35,7 +35,7 @@ c8f70450e7d78c0387644864ffe8cbd5:.ocamlformat-ignore
 
 # begin context for CHANGES.md
 # file CHANGES.md
-784991bfaa05c5a88a7340bb2ac68f16:CHANGES.md
+fca8c89f207441e11bbb3205b4eea1ea:CHANGES.md
 # end context for CHANGES.md
 
 # begin context for LICENSE.md
@@ -95,7 +95,7 @@ c8281f46ba9a11d0b61bc8ef67eaa357:docs/style.css
 
 # begin context for dune-project
 # file dune-project
-e6fe3ebe31c0b62de7c02a9d646bf3a0:dune-project
+7fd121ca12e33fe80e4111e7cf8fcbd9:dune-project
 # end context for dune-project
 
 # begin context for opam/ocyula.opam
@@ -105,7 +105,7 @@ eee5e2e1789729da949f1786c45e23c6:opam/ocyula.opam
 
 # begin context for opam/ocyula_lib.opam
 # file opam/ocyula_lib.opam
-158c214fde6a11d55eb8968bc3e716df:opam/ocyula_lib.opam
+ea6a015453f8c8a1b74382011f2ac4db:opam/ocyula_lib.opam
 # end context for opam/ocyula_lib.opam
 
 # begin context for scripts/after.sh
@@ -180,7 +180,7 @@ e0cddeb2ec8b19213dec2c0713271ef3:src/ocyula/main.ml
 
 # begin context for src/ocyula_lib/dune
 # file src/ocyula_lib/dune
-1a0d361bdc4025d55b8c0066ef35a413:src/ocyula_lib/dune
+78dbe523b818c52a4d52853714b49645:src/ocyula_lib/dune
 # end context for src/ocyula_lib/dune
 
 # begin context for src/ocyula_lib/index.mld
