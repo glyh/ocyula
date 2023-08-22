@@ -1,100 +1,91 @@
-(* This is the Hindly Miller Type Checking Algorithm with some modification *)
-type type_var = string
+type cmp_res = LT | GT | EQ
+
+let compare l r = 
+   if l < r then LT 
+   else if l = r then EQ 
+   else GT
 
 exception Unimplemented
 
-module FVSet = struct
-   include Set.Make(String)
-   let pp fmt (s : t) : unit = 
-      s
-      |> map (fun s -> "`" ^ s ^ "`")
-      |> fun s -> fold (fun e arr -> e :: arr) s []
-      |> String.concat ", "
-      |> Format.fprintf fmt "{%s}"
-end
+type type_var = string
+type ident = string
 
+module FVSet = Set.Make(String)
 module TypeEnv = CCPersistentHashtbl.Make(struct
-   type t = Ast.ident
+   type t = ident
    let equal s t = s = t
    let hash = Hashtbl.hash
 end)
 
 type ty = 
    | TyInt
-   | TyStr
    | TyF64
+   | TyStr
    | TyBool
    | TyType
    | TyKeyword
    | TyTuple of ty list
    | TyList of ty
-   | TyLam of ty list * ty
-   | TyVar of type_var [@printer fun fmt -> fprintf fmt "%s"]
-   | TyForall of FVSet.t * ty (* polymorphic types *)
-   (* | TyApp *) (* If we have generics *)
-[@@deriving show]
+   | TyLam of ty * ty (* we have currying *)
+   | TyVar of type_var
+   | TyForAll of type_var * ty (* multiple Forall's should be chained *)
 
-let tyUnit = TyTuple []
+type unify_error_reason = 
+     InfiniteSubstitution
+   | TupleLengthMismatch
+   | CantUnifyBetween of ty * ty
+exception UnifyError of unify_error_reason
 
 type type_env = ty TypeEnv.t
 
-(* TODO: typing for pattern *)
-type pattern =
-   | Bind of Ast.ident * ty (* creates new binding *)
-   | Pin of Ast.ident * ty (* match with exisiting value *)
-   (* For Lens pattern, we force the last param to be a pattern as well so we may match on it. *)
-   | Lens of pattern * Ast.ident * typed_exp list * ty
-            (* A          B           (c, d, e)        T*)
-            (* A.B(c, d, e) as T *)
-   | PatTuple of pattern list * ty
-   | PatList of pattern list * ty
-   | Lit of Ast.atom * ty
+let tyUnit = TyTuple []
 
-and typed_exp =
-   | TAtom of Ast.atom * ty
-   | TVal of Ast.ident * ty 
-   | TMatch of pattern * typed_exp * ty
-   | TTuple of typed_exp list * ty
-   | TList of typed_exp list * ty
-   | TIf of typed_exp * typed_exp list * typed_exp list * ty
-   | TCall of Ast.ident * typed_exp list * ty
-   | TLam of Ast.ident list * typed_exp list * ty
-   | TCase of typed_exp * (pattern * typed_exp list) list * ty
-   | TSeq of typed_exp list * ty
+type 'a exp_prim = 
+   | Atom of (Ast.atom * 'a)
+   | Val of (ident * 'a)
+   | Tuple of ('a exp_prim list * 'a)
+   | List of ('a exp_prim list * 'a)
+   | Let of (ident * 'a exp_prim * 'a exp_prim * 'a)
+   | If of ('a exp_prim * 'a exp_prim * 'a exp_prim * 'a)
+   | App of ('a exp_prim * 'a exp_prim * 'a)
+   (* I should call this Abstraction instead to closely match lambda abstraction *)
+   | Lam of (ident * 'a exp_prim * 'a)
+   (* Our low-level try only have 2 options: succeeds in first branch, or fallback to the second *)
+   | Try of ('a exp_prim * 'a exp_prim * 'a)
+   | Seq of ('a exp_prim list * 'a)
 
-(* let check_exp (env : type_env) (exp : Ast.exp) = 1 *)
-(* and  exp_to_pat (env : type_env) (exp : Ast.exp) = 1 *)
+type ty_constraint = ty * ty
+type ty_constraints = ty_constraint list
 
-type subst = (type_var * ty) list
+type exp_prim_input = unit exp_prim
 
-exception Type_error of string
+type exp_prim_annotated = ty exp_prim
 
-let rec subst_var_scheme ((tyvar : type_var), (to_typ: ty)) (in_typ: ty) : ty = 
-   match in_typ with
-   | TyVar(v) when v = tyvar -> to_typ
-   | TyTuple(l) -> TyTuple(List.map (subst_var_scheme (tyvar, to_typ)) l)
-   | TyList t -> TyList (subst_var_scheme (tyvar, to_typ) t)
-   | TyLam(params, ret) -> TyLam (List.map (subst_var_scheme (tyvar, to_typ)) params, subst_var_scheme (tyvar, to_typ) ret)
-   | TyForall(fvs, inner) ->
-      if FVSet.mem tyvar fvs then TyForall(fvs, inner)
-      else TyForall(fvs, subst_var_scheme (tyvar, to_typ) inner)
-   | any -> any
+let take_annotated_type (e : exp_prim_annotated) : ty =
+   match e with 
+   | Atom (_, t) -> t
+   | Val (_, t) -> t
+   | Tuple (_, t) -> t
+   | List (_, t) -> t
+   | Let (_, _, _, t) -> t
+   | If (_, _, _, t) -> t
+   | App (_, _, t) -> t
+   | Lam (_, _, t) -> t
+   | Try (_, _, t) -> t
+   | Seq (_, t) -> t
 
-let apply_subst_typ (subst: subst) (t: ty) : ty =
-   List.fold_right subst_var_scheme subst t  
-
-let apply_subst_typeenv (subst: subst) : (type_env -> type_env) = TypeEnv.map (fun _ ty -> apply_subst_typ subst ty)
-   
-(* apply substitution src on dest *)
-let apply_subst_subst (src : subst) (dest: subst) : subst =
-   List.map (fun (id, ty) -> (id, apply_subst_typ src ty)) dest
-
-(* apply sub1 and then apply sub2 *)
-let compose_subst (sub1: subst) (sub2: subst) : subst = 
-   (apply_subst_subst sub2 sub1) @ sub2
-
-let compose_substs (subs: subst list) : subst = 
-   List.fold_left compose_subst [] subs
+let put_annotated_type (e: exp_prim_annotated) (ty : ty) : exp_prim_annotated =
+   match e with 
+   | Atom (a, _) -> Atom(a, ty)
+   | Val (v, _) -> Val(v, ty)
+   | Tuple (t, _) -> Tuple(t, ty)
+   | List (l, _) -> List (l, ty)
+   | Let (s, b, i, _) -> Let(s, b, i, ty)
+   | If (c, t, f, _) -> If(c, t, f, ty)
+   | App (f, x, _) -> App(f, x, ty)
+   | Lam (p, b, _) -> Lam (p, b, ty)
+   | Try (t, f, _) -> Try(t, f, ty)
+   | Seq (s, _) -> Seq(s, ty)
 
 let rec free_variables (t: ty) : FVSet.t =
    match t with
@@ -103,235 +94,216 @@ let rec free_variables (t: ty) : FVSet.t =
       let sets = List.map free_variables l in
          List.fold_right FVSet.union sets FVSet.empty
    | TyList t -> free_variables t
-   | TyLam(params, ret) -> 
-      let sets = List.map free_variables params in
-         List.fold_right FVSet.union sets (free_variables ret)
-   | TyForall(fvs, inner) ->
-      FVSet.diff (free_variables inner) fvs
+   | TyLam(param, ret) -> 
+      FVSet.union (free_variables param) (free_variables ret)
+   | TyForAll(fv, inner) ->
+      FVSet.remove fv (free_variables inner)
    | _ -> FVSet.empty
 
-let occurs (v: type_var) (t: ty) = 
-   FVSet.mem v (free_variables t) 
+let free_variables_env (env: type_env) : FVSet.t =
+   TypeEnv.fold (fun s _ t -> FVSet.union s (free_variables t)) FVSet.empty env
+
+let occurs (v : type_var) (t: ty) =
+   FVSet.mem v (free_variables t)
+
+type subst = (type_var * ty) list
+
+let subst_on_typ (sub: subst) (t: ty) : ty = 
+   let rec sub1 s in_ty =
+      let (tyvar, to_ty) = s in
+         match in_ty with
+         | TyVar(v) when v = tyvar -> to_ty
+         | TyTuple(l) -> TyTuple(List.map (sub1 s) l)
+         | TyList t -> TyList (sub1 s t)
+         | TyLam(param, ret) -> TyLam (sub1 s param, sub1 s ret)
+         | TyForAll(fv, inner) when tyvar != fv ->
+            TyForAll(fv, sub1 s inner)
+         | any -> any
+   in
+   List.fold_right sub1 sub t 
+
+let subst_on_subst (src: subst) (dest: subst) : subst =
+   List.map (fun (id, ty) -> (id, subst_on_typ src ty)) dest
+
+let subst_on_constraints (sub: subst) (cs: ty_constraints) : ty_constraints = 
+   List.map (fun (t1, t2) -> (subst_on_typ sub t1, subst_on_typ sub t2)) cs
+
+let subst_on_env (sub: subst) (env: type_env) : type_env = 
+   TypeEnv.map (fun _ t -> subst_on_typ sub t) env
+
+let rec subst_on_exp_annotated (sub: subst) (e : exp_prim_annotated) : exp_prim_annotated =
+   let subt = subst_on_typ sub in
+   let sube = subst_on_exp_annotated sub in 
+   match e with
+   | Atom(v, t) -> Atom(v, subt t)
+   | Val(id, t) -> Val(id, subt t)
+   | Tuple(es, t) -> 
+      Tuple(List.map sube es, subt t)
+   | List(es, t) -> 
+      List(List.map sube es, subt t)
+   | Let (id, exp, body, t) -> 
+      Let(id, sube exp, sube body, subt t)
+   | If (cond, _then, _else, t) -> 
+      If(sube cond, sube _then, sube _else, subt t)
+   | App (f, x, t) ->
+      App(sube f, sube x, subt t)
+   | Lam (id, body, t) ->
+      Lam(id, sube body, subt t)
+   | Try (tried, fail, t) ->
+      Try(sube tried, sube fail, subt t)
+   | Seq (es, t) ->
+      Seq (List.map sube es, subt t)
+
+(* compose_subst(sub2, sub1) ty = sub2(sub1(ty)) *)
+let compose_subst (sub2: subst) (sub1: subst) : subst = 
+   sub2 @ (subst_on_subst sub2 sub1) 
 
 let gensym = 
    let count = ref 0 in 
-   let next () = 
-      count := !count + 1;
-      !count
-   in fun str -> TyVar (Printf.sprintf "%s_%d" str (next ()))
+   let next () = count := !count + 1; !count
+   in fun prefix -> prefix ^ string_of_int (next ())
 
-let instantiate (fvs: FVSet.t) (ty: ty) : ty = 
-   let alpha_equiv_subst = FVSet.fold (fun s subst -> (s, gensym s) :: subst) fvs [] in 
-      apply_subst_typ alpha_equiv_subst ty
+let instantiate (ty: ty) : ty =
+   match ty with 
+   | TyForAll(v, inner) -> 
+      let instantiate = gensym ("instantiate_" ^ v) in
+         subst_on_typ [(v, TyVar instantiate)] inner
+   | _ -> ty
 
-type cmp_res = LT | GT | EQ
+let rec unify_one (c: ty_constraint) : subst = 
+   match c with
+   | (TyVar(v1), t2) ->
+      if occurs v1 t2 then
+         raise (UnifyError InfiniteSubstitution)
+      else
+         [(v1, t2)]
+   | (t1, TyVar(v2)) ->
+      if occurs v2 t1 then
+         raise (UnifyError InfiniteSubstitution)
+      else
+         [(v2, t1)]
+   | (TyTuple t1s, TyTuple t2s) ->
+      if List.length t1s = List.length t2s then
+         unify (List.combine t1s t2s)
+      else
+         raise (UnifyError TupleLengthMismatch)
+   | (TyList t1, TyList t2) ->
+      unify_one (t1, t2)
+   | (TyLam (p1, r1), TyLam (p2, r2)) ->
+      compose_subst 
+         (unify_one (p1, p2))
+         (unify_one (r1, r2))
+   | (TyForAll (v, inner), rhs) ->
+      unify_one ((instantiate (TyForAll (v, inner))), rhs)
+   | (lhs, TyForAll (v, inner)) ->
+      unify_one (lhs, (instantiate (TyForAll (v, inner))))
+   | (lhs, rhs) -> 
+      if lhs = rhs 
+      then []
+      else raise (UnifyError (CantUnifyBetween(lhs, rhs)))
 
-let compare l r = 
-   if l < r then LT 
-   else if l = r then EQ 
-   else GT
+and unify (cs: ty_constraints): subst = 
+   match cs with 
+   | [] -> []
+   | c :: rest -> 
+      let c_subst = unify_one c in
+         (* there's no need to use compose here, as we already subsitute on the constratints as a whole *)
+         (unify (subst_on_constraints c_subst rest)) @ c_subst
 
-exception Split_error of string
-let rec split_at l i = 
-   if i < 0 then
-      raise (Split_error "splitting with negative index")
-   else if i == 0 then
-      ([], l)
-   else 
-      match l with
-      | a :: rest ->
-         let (leftl, rightl) = split_at rest (i - 1) in
-            (a :: leftl, rightl)
-      | [] -> raise (Split_error "list too short")
+let generalize (env : type_env) (ty : ty) (cons: ty_constraints): ty = 
+   (* Cons is the contraint we got by inferring some expression, 
+      ty is the type returned. 
+      What we need to do now is to *)
+   let subst = unify cons in
+   let env_inferred = subst_on_env subst env in
+   let ty_subst = subst_on_typ subst ty in 
+   (* Any free variables in the substituted type but not in the substituted environment are variables 
+      that can't be inferred, we need to generalize,
+      we are free to reuse the constraints *)
+   let fvs = FVSet.diff (free_variables ty_subst) (free_variables_env env_inferred) in
+      FVSet.fold (fun id ty -> TyForAll(id, ty)) fvs ty_subst
 
-let rec unify_tuple (t1: ty list) (t2: ty list) : subst = 
-   if List.length t1 = List.length t2 then 
-      List.combine t1 t2
-      |> List.map (fun (l, r) -> unify l r)
-      |> compose_substs
-   else raise (Type_error (Printf.sprintf "Can't unify between %s and %s" (show_ty (TyTuple t1)) (show_ty (TyTuple t2))))
-and unify (t1: ty) (t2: ty) : subst = 
-   match (t1, t2) with
-   | (lhs, rhs) when lhs = rhs -> []
-   | (TyVar(t1v), t2) -> 
-      if (occurs t1v t2) then 
-         raise (Type_error (Printf.sprintf "Nested unify between %s and %s" (show_ty t1) (show_ty t2)))
-      else 
-         [(t1v, t2)]
-   | (t1, TyVar(t2v)) -> 
-      if (occurs t2v t1) then 
-         raise (Type_error (Printf.sprintf "Nested unify between %s and %s" (show_ty t1) (show_ty t2)))
-      else 
-         [(t2v, t1)]
-   | (TyTuple t1, TyTuple t2) -> unify_tuple t1 t2
-   | (TyList tleft, TyList tright) -> unify tleft tright
-   | (TyLam(argl, retl), TyLam(argr, retr)) ->
-      (* We need to take currying into consideration *)
-      let len_l = List.length argl in
-      let len_r = List.length argr in
-         begin match compare len_l len_r with
-         | EQ -> 
-            compose_subst (unify_tuple argl argr) (unify retl retr)
-         | LT -> 
-            let (r_match, r_rest) = split_at argr len_l in 
-            let rest_unified = unify retl (TyLam (r_rest, retr)) in
-            compose_subst (unify_tuple argl r_match) rest_unified 
-         | GT ->
-            let (l_match, l_rest) = split_at argl len_r in 
-            let rest_unified = unify (TyLam (l_rest, retl)) retr in
-            compose_subst (unify_tuple l_match argr) rest_unified 
-         end
-   | (TyForall(fvs, inner), t2) -> 
-      unify (instantiate fvs inner) t2
-   | (t1, TyForall(fvs, inner)) -> 
-      unify t1 (instantiate fvs inner)
-   | _ -> raise (Type_error (Printf.sprintf "Can't unify between %s and %s" (show_ty t1) (show_ty t2)))
-
-exception IndexOutOfBound
-
-let rec last l = 
-   match l with
-   | [x] -> x
-   | _ :: rest -> last rest
-   | _ -> raise IndexOutOfBound
-
-(* NOTE: return value for infer function is a 3-tuple (t, s, out),
-   where e is the alterred env(there might be new bindings introduced), 
-   s is the subsitution on exisiting types, 
-   out is the return type *)
-let rec infer_pattern_series (env : type_env) (pats : Ast.exp list) : type_env * subst * ty list = 
-   match pats with 
-   | [] -> (env, [], [])
-   | first :: rest -> 
-      let env, subst_first, ty_first = infer_pattern env first in 
-      (* let env = apply_subst_typeenv subst_first env in *)
-      let env, subst_rest, tys_rest = infer_pattern_series env rest in
-      env, compose_subst subst_first subst_rest, ty_first :: tys_rest
-
-and infer_pattern (env : type_env) (pattern : Ast.exp) : type_env * subst * ty = 
-   match pattern with
-   | Atom (Int _)     -> env, [], TyInt
-   | Atom (F64 _)     -> env, [], TyF64
-   | Atom (Str _)     -> env, [], TyStr
-   | Atom (Keyword _) -> env, [], TyKeyword
-   | Val id           -> 
-      let ty_sym = gensym id in
-      let new_env = TypeEnv.add env id ty_sym in
-      new_env, [], ty_sym
-   | Tuple exps -> 
-      let env, sub, list = infer_pattern_series env exps in 
-      env, sub, TyTuple list
-   | List exps -> 
-      let env, sub, tys = infer_pattern_series env exps in
-      begin match tys with
-      | [] -> env, sub, TyList (gensym "list")
-      | [only] -> env, sub, TyList only
+let rec infer_constraints (env: type_env) (exp : exp_prim_input) : (exp_prim_annotated * ty_constraints) = 
+   match exp with 
+   | Atom (Bool b, _) -> Atom (Bool b, TyBool), []
+   | Atom (Int i, _) -> Atom (Int i, TyInt), []
+   | Atom (F64 f, _) -> Atom (F64 f, TyF64), []
+   | Atom (Str s, _) -> Atom (Str s, TyStr), []
+   | Atom (Keyword k, _) -> Atom (Keyword k, TyKeyword), []
+   | Val (id, _) -> 
+      Val (id, TyVar (gensym ("var_" ^ id))), []
+   | Tuple (exps, _) ->
+      let exps, constraints_list = List.map (infer_constraints env) exps |> List.split in
+      let inner_tys = List.map take_annotated_type exps in
+      let constraints = List.concat constraints_list in
+      Tuple (exps, TyTuple inner_tys), constraints
+   | List (exps, _) -> 
+      let exps, constraints_list = List.map (infer_constraints env) exps |> List.split in
+      let inner_tys = List.map take_annotated_type exps in
+      let constraints = List.concat constraints_list in
+      begin match inner_tys with
+      | [] -> 
+         let f = gensym "list" in
+            List (exps, (TyList (TyVar f))), constraints
+      | [only] -> 
+         List (exps, TyList only), constraints
       | first :: rest -> 
-         let sub = List.map (unify first) rest |> compose_substs in
-         env, sub, TyList (apply_subst_typ sub first)
+         List (exps, TyList first), constraints @ (List.map (fun ty -> ty, first) rest) 
       end
-   | _ -> raise Unimplemented
+   | Let (id, bind, inner, _) -> 
+      let bind, bind_cons = infer_constraints env bind in
+      let bind_ty = take_annotated_type bind in
+      let bind_ty_generalize = generalize env bind_ty bind_cons in
+      let env_bind = TypeEnv.add env id bind_ty_generalize in
+      let bind_generalized = put_annotated_type bind bind_ty_generalize in
+      let inner, inner_cons = infer_constraints env_bind inner in
+         Let (id, bind_generalized, inner, take_annotated_type inner), bind_cons @ inner_cons
+   | If (_test, _then, _else, _) ->
+      let _test, test_constraint = infer_constraints env _test in
+      let ty_test = take_annotated_type _test in
+      let _then, then_constraint = infer_constraints env _then in
+      let ty_then = take_annotated_type _then in
+      let _else, else_constraint = infer_constraints env _else in
+      let ty_else = take_annotated_type _else in
+         If (_test, _then, _else, ty_then), 
+         test_constraint @ 
+         then_constraint @ 
+         else_constraint @
+         [ty_test, TyBool; ty_then, ty_else]
+   | App (fn, par, _) ->
+      let fn, fn_cons = infer_constraints env fn in
+      let ty_fn = take_annotated_type fn in
+      let par, par_cons = infer_constraints env par in 
+      let ty_par = take_annotated_type par in
+      let out = gensym "app_ret" in
+         App (fn, par, TyVar out), 
+         fn_cons @ par_cons @ [ty_fn, TyLam(ty_par, (TyVar out))]
+   | Lam (param, body, _) ->
+      let param_ty = TyVar (gensym ("lam_param" ^ param)) in
+      let env_updated = TypeEnv.add env param param_ty in
+      let body, body_cons = infer_constraints env_updated body in
+      let ty_body = take_annotated_type body in
+         Lam (param, body, TyLam (param_ty, ty_body)), body_cons
+   | Try (_try, _catch, _) ->
+      let _try, try_constraint = infer_constraints env _try in
+      let ty_try = take_annotated_type _try in
+      let _catch, catch_constraints = infer_constraints env _catch in
+      let ty_catch = take_annotated_type _catch in
+         Try (_try, _catch, ty_try), 
+         try_constraint @
+         catch_constraints @
+         [ty_try, ty_catch]
+   | Seq (exps, _) ->
+      let exps, constraints_list = List.map (infer_constraints env) exps |> List.split in
+      let inner_tys = List.map take_annotated_type exps in
+      let constraints = List.concat constraints_list in
+         if List.length exps = 0 
+         then Tuple ([], tyUnit), constraints
+         else Seq (exps, inner_tys |> List.rev |> List.hd), constraints
 
-and infer_series (env : type_env) (exps : Ast.exp list) : type_env * subst * ty list = 
-   match exps with 
-   | [] -> (env, [], [])
-   | first :: rest -> 
-      let env, subst_first, ty_first = infer_exp env first in 
-      (* let env = apply_subst_typeenv subst_first env in *)
-      let env, subst_rest, tys_rest = infer_series env rest in
-      env, compose_subst subst_first subst_rest, ty_first :: tys_rest
-
-and infer_pattern_match (env : type_env) (lhs : Ast.exp) (rhs : Ast.exp) : type_env * subst * ty =
-   let env, subl, ty_lhs = infer_pattern env lhs in
-   let env, subr, ty_rhs = infer_exp env rhs in
-
-   let sub_match = unify ty_lhs ty_rhs in
-   let sub_final = compose_substs [subl; subr; sub_match] in
-
-   apply_subst_typeenv sub_final env, sub_final, apply_subst_typ sub_final ty_rhs
-
-and infer_exp (env : type_env) (exp : Ast.exp): type_env * subst * ty = 
-   match exp with
-   | Atom (Int _)     -> env, [], TyInt
-   | Atom (F64 _)     -> env, [], TyF64
-   | Atom (Str _)     -> env, [], TyStr
-   | Atom (Keyword _) -> env, [], TyKeyword
-   | Val id           -> env, [], TypeEnv.find env id
-   | Tuple exps -> 
-      let env, sub, list = infer_series env exps in 
-      env, sub, TyTuple list
-   | List exps -> 
-      let env, sub, tys = infer_series env exps in
-      begin match tys with
-      | [] -> env, sub, TyList (gensym "list")
-      | [only] -> env, sub, TyList only
-      | first :: rest -> 
-         let sub = List.map (unify first) rest |> compose_substs in
-         env, sub, TyList (apply_subst_typ sub first)
-      end
-   | Call("!match", [_lhs; _rhs]) ->
-      infer_pattern_match env _lhs _rhs
-   | Call(fn, params) -> 
-      let ty_fn = TypeEnv.find env fn in
-
-      let [@warning "-8"] env, sub_inner, TyTuple ty_params = infer_exp env (Tuple params) in
-      let ret_type = gensym "ret" in
-      let ty_fn_instantiated = TyLam(ty_params, ret_type) in
-
-      let sub_call = unify ty_fn ty_fn_instantiated in 
-      let final_sub = compose_subst sub_inner sub_call in
-
-      apply_subst_typeenv final_sub env, final_sub, apply_subst_typ final_sub ret_type 
-   | Lam(params, body) ->
-      let updateEnv env param =
-         TypeEnv.add env param (gensym ("lam_arg" ^ param))
-      in
-      let env_body = List.fold_left updateEnv env params in
-      (* NOTE: no bindings will be leaked outside of a lambda function *)
-      let _, subst, ret_inferred = infer_exp env_body (Tuple body) in
-      let params_inferred = 
-         params 
-         |> List.map (TypeEnv.find env_body) 
-         |> List.map (apply_subst_typ subst) 
-      in
-      apply_subst_typeenv subst env, subst, TyLam(params_inferred, ret_inferred)
-   | If(_cond, _then, _else) ->
-      (* NOTE: no bindings will be introduced by a if statement *)
-      let [@warning "-8"] _, sub_inner, [ty_cond; TyTuple ty_then_tup; TyTuple ty_else_tup] =
-         infer_series env [_cond; Tuple _then; Tuple _else] in
-      let ty_then = last ty_then_tup in
-      let ty_else = last ty_else_tup in
-
-      let sub_test = unify TyBool ty_cond in
-      let sub_body = unify ty_then ty_else in
-
-      let sub_final = compose_substs [sub_inner; sub_test; sub_body] in 
-      apply_subst_typeenv sub_final env, sub_final, apply_subst_typ sub_final ty_then
-   | Case(matched, cases) -> 
-         let infer_case env (case: (Ast.exp * Ast.exp list)) : (subst * ty) = 
-            let pat, body = case in
-            (* drop the env as we should not leak *)
-            let _, subst, ret = infer_exp env (Seq (Call("!match", [pat; matched]) :: body)) in
-            subst, ret
-         in
-         let infer_cases env (cases : (Ast.exp * Ast.exp list) list) : (subst * ty) list =  
-            List.map (infer_case env) cases 
-         in
-         (* NOTE: no bindings will be introduced by a case statement *)
-         let env_inner, _, _ = infer_exp env matched in
-         let substs, tys = infer_cases env_inner cases |> List.split in
-         begin match tys with 
-         | [only] -> 
-            env, compose_substs substs, only
-         | [] -> raise Unimplemented
-         | first :: rest -> 
-            let subs = List.map (unify first) rest in
-            let sub_final = compose_substs (substs @ subs) in
-            apply_subst_typeenv sub_final env, sub_final, apply_subst_typ sub_final first
-         end
-   | Seq exps -> 
-      let env, sub, list = infer_series env exps in 
-         if List.length list = 0 
-         then env, sub, tyUnit
-         else env, sub, last list
-   | _ -> raise Unimplemented
+let infer_and_generalize (env: type_env) (exp: exp_prim_input) : exp_prim_annotated = 
+   let annotated, cons = infer_constraints env exp in
+   let ty_annotated = take_annotated_type annotated in  
+   let ty_generalized = generalize env ty_annotated cons in
+   let annotated_generalized = put_annotated_type annotated ty_generalized in
+      annotated_generalized 

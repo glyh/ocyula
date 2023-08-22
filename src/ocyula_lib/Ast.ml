@@ -1,12 +1,5 @@
 type ident = string
 
-type bin_operator = 
-   | EQ | NE | LE | LT | GE | GT
-   | ADD | SUB | MUL | DIV
-   | AND | OR
-   | AS (* type annotation *)
-   | MATCH (* pattern matching *)
-
 type unary_operator = 
      NOT
 

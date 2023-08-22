@@ -144,7 +144,7 @@ exp2:
   | a=atom { Atom(a) }
   | id=ident { Val(id) }
   | LPAREN RPAREN { Tuple([]) }
-  | pinned=PIN_IDENT { Call("pin", [Val(pinned)]) }
+  | pinned=PIN_IDENT { Call("!pin", [Val(pinned)]) }
 
 ident:
   | id=IDENT { id }
