@@ -1,6 +1,8 @@
 open Stdlib
 open Lexing
 
+exception Unimplemented
+
 let read_stdin () = 
   let acc = ref "" in 
   try 
@@ -26,7 +28,11 @@ let parse s =
   with Parser.Error ->
     raise (Failure ("Parse error at" ^ (pos_string lexbuf.lex_curr_p)))
 
+let global_ty_env = Type.TypeEnv.empty ()
+
 let main () = 
   let input = read_stdin() in 
   let parsed = parse input in 
-    print_endline (Codegen.compile parsed) 
+  let desugarred = Desugar.desugar parsed in
+  let _typechecked = Type.infer_and_generalize global_ty_env desugarred in
+    raise Unimplemented

@@ -1,6 +1,13 @@
 %{
 open Ast
 
+type bin_operator = 
+   | EQ | NE | LE | LT | GE | GT
+   | ADD | SUB | MUL | DIV
+   | AND | OR
+   | AS (* type annotation *)
+   | MATCH (* pattern matching *)
+
 let bin_op_to_str ( op : bin_operator) =
    match op with 
    | EQ -> "_eq"
