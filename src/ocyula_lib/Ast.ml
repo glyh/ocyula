@@ -28,6 +28,7 @@ and pattern =
    | PatTuple of pattern list
    | PatList of pattern list
    | Lit of atom
+   | Any
    (* TODO : add `as` pattern to match against types *)
 
 and exp =
@@ -39,8 +40,8 @@ and exp =
    | If of exp * exp list * exp list
    | Call of ident * exp list
    | Lam of pattern list * exp list
-   (* pattern matching can be represented as case *)
-   | Case of exp * (pattern * exp list) list
+   (* In (pattern * exp * exp list), second exp is the boolean expression acting as a guard *)
+   | CaseMatch of exp * (pattern * exp * exp list) list
    | Seq of exp list
    | Match of pattern * exp
    (* builtins *)

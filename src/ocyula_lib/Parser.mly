@@ -1,11 +1,6 @@
 %{
 open Ast
 
-(* let up_pat_to_exp (u : updatable_pattern) : exp =  *)
-(*    match u with *)
-(*    | Bind(id) -> Val(id) *)
-(*    | Lens(obj, _method, params) -> Call(_method, Val(obj) :: params) *)
-
 exception WrongPatternFormat
 
 let rec break_last (l: 'a list) : ('a list * 'a) option = 
@@ -38,6 +33,7 @@ and exp_to_pat (p: exp) : pattern =
 
 %}
 
+%token <bool> BOOL_CONSTANT
 %token <int> INT_CONSTANT
 %token <float> FLOAT_CONSTANT
 %token <string> KEYWORD
@@ -82,6 +78,7 @@ and exp_to_pat (p: exp) : pattern =
 %token ELSE
 %token FUNCTION
 %token CASE
+%token MATCH
 %token WHEN
 // %token INT_T
 // %token STR_T
@@ -98,13 +95,10 @@ and exp_to_pat (p: exp) : pattern =
 %left T_EQ T_NE T_LE T_LT T_GE T_GT
 %left T_ADD T_SUB
 %left T_MUL T_DIV
-//%left DOT
 %nonassoc T_NOT
 %nonassoc T_PIN
 
 %type <exp> program
-// %type <pattern> pattern
-// %type <updatable_pattern> updatable_pattern
 %type <unary_operator> un_op
 
 %start program
@@ -117,10 +111,16 @@ program:
 %inline un_op: 
   | T_NOT { NOT }
 
+// When we want a pattern, we always use exp4 and then do a exp_to_pat on it, so we never have conflicts
+
 // Satement-like expressions
 exp: 
   | IF test=exp _then=no_end_terminated_exps ELSE _else=end_terminated_exps { If(test, _then, _else) }
-  | CASE matched=exp body=list(case_param) END { Case(matched, body) }
+  | MATCH matched=exp4 branches=list(case_param) ow=option(else_branch) END { 
+    match ow with 
+    | Some(ow) -> CaseMatch(matched, branches @ [ow]) 
+    | None -> CaseMatch(matched, branches) 
+  }
   | FUNCTION LPAREN args=separated_list(COMMA, exp4) RPAREN body=end_terminated_exps { 
     Lam(List.map exp_to_pat args, body)
   }
@@ -131,8 +131,18 @@ exp:
   | exp1 { $1 }
 
 case_param: 
-  | WHEN pat=exp4 act=no_end_terminated_exps { 
-    (exp_to_pat pat, act) 
+  | CASE pat=exp4 g=option(guard) act=no_end_terminated_exps { 
+    match g with 
+    | Some(g) -> (exp_to_pat pat, g, act) 
+    | None -> (exp_to_pat pat, Atom (Bool true), act)
+  }
+
+guard: 
+  | WHEN e=exp { e }
+
+else_branch: 
+  | ELSE act=no_end_terminated_exps {
+    (Any, Atom (Bool true), act)
   }
 
 no_end_terminated_exps: 
@@ -143,7 +153,7 @@ end_terminated_exps:
   | l=list(exp) END { l }
   | COLON e=exp { [e] }
 
-// update match, not nestable
+// Update match, not nestable
 exp1: 
   | pat=exp4 op=T_UPDATE_MATCH rhs=exp3 { 
     match exp_to_pat pat with
@@ -194,21 +204,6 @@ exp4:
   | T_AND { AND }
   | T_OR { OR }
   | T_AS { AS }
-  // | T_MATCH { MATCH }
-
-// updatable_pattern: 
-//   | id=IDENT { Bind(id) }
-//   | obj=IDENT DOT _method=CALL args=separated_list(COMMA, exp) RPAREN { Lens(obj, _method, args) }
-//   // above rule conflicts with binary/unary operation
-//   | _method=CALL args=separated_list(COMMA, exp) COMMA obj=IDENT RPAREN { Lens(obj, _method, args) }
-
-// pattern: 
-//   | u=updatable_pattern { Updatable(u) }
-//   | pinned=PIN_IDENT { Pin(pinned) }
-//   | LPAREN l=separated_list(COMMA, pattern) RPAREN { PatTuple(l) }
-//   | LBRACKET l=separated_list(COMMA, pattern) RBRACKET { PatList(l) }
-//   | a=atom { Lit(a) }
-
 
 atom: 
   // | INT_T { Type TInt }
@@ -216,6 +211,7 @@ atom:
   // | F64_T { Type TF64 }
   // | TYPE_T { Type TType }
   // | KEYWORD_T { Type TKeyword }
+  | b=BOOL_CONSTANT { Bool b }
   | i=INT_CONSTANT { Int i }
   | f=FLOAT_CONSTANT { F64 f }
   | s=STRING { Str s }
