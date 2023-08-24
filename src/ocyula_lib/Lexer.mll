@@ -48,10 +48,11 @@ rule token = parse
   | "." { DOT }
   | identifier ":" { LABEL (drop_str_r 1 (Lexing.lexeme lexbuf)) } 
   | ":" { COLON }
+  | "^" { T_PIN }
   | "as" { T_AS }
   (* | "=>" { FATARROW } *)
   | (identifier | "+" | "-" | "*" | "/" | "and" | "or" | "not") "=" { T_UPDATE_MATCH (drop_str_r 1 (Lexing.lexeme lexbuf)) }
-  | "^" identifier { PIN_IDENT (drop_str 1 (Lexing.lexeme lexbuf))}
+  (*| "^" identifier { PIN_IDENT (drop_str 1 (Lexing.lexeme lexbuf))}*)
   | "==" { T_EQ }
   | "!=" { T_NE }
   | "<=" { T_LE }

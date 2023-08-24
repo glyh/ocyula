@@ -1,36 +1,40 @@
 %{
 open Ast
 
-type bin_operator = 
-   | EQ | NE | LE | LT | GE | GT
-   | ADD | SUB | MUL | DIV
-   | AND | OR
-   | AS (* type annotation *)
-   (* | MATCH (* pattern matching *) *)
+(* let up_pat_to_exp (u : updatable_pattern) : exp =  *)
+(*    match u with *)
+(*    | Bind(id) -> Val(id) *)
+(*    | Lens(obj, _method, params) -> Call(_method, Val(obj) :: params) *)
 
-let bin_op_to_str = function
-   | EQ -> "_eq"
-   | NE -> "_ne"
-   | LE -> "_le"
-   | LT -> "_lt"
-   | GE -> "_ge"
-   | GT -> "_gt"
-   | ADD -> "_add"
-   | SUB -> "_sub"
-   | MUL -> "_mul"
-   | DIV -> "_div"
-   | AND -> "_and"
-   | OR -> "_or"
-   | AS -> "_as"
-   (* | MATCH -> "!match" *)
+exception WrongPatternFormat
 
-let un_op_to_str = function
-   | NOT -> "_not"
+let rec break_last (l: 'a list) : ('a list * 'a) option = 
+  match l with
+  | [] -> None
+  | [x] -> Some ([], x)
+  | x :: rest -> 
+    match break_last rest with
+    | Some (l, last) -> Some (x :: l, last)
+    | None -> None
 
-let up_pat_to_exp (u : Ast.updatable_pattern) : Ast.exp = 
-   match u with
-   | Bind(id) -> Val(id)
-   | Lens(obj, _method, params) -> Call(_method, Val(obj) :: params)
+let rec call_to_lens (_method : string) (args : exp list) =
+  match break_last args with
+  | Some (but_last, e) -> 
+    begin match exp_to_pat e with
+    | Updatable u ->  Updatable(Lens(u, _method, but_last))
+    | _ -> raise WrongPatternFormat
+    end
+  | _ -> raise WrongPatternFormat
+
+and exp_to_pat (p: exp) : pattern =
+  match p with 
+  | Atom a -> Lit a
+  | UnPin id -> Pin id
+  | Val id -> Updatable (Bind id)
+  | Tuple t -> PatTuple (List.map exp_to_pat t)
+  | List l -> PatList (List.map exp_to_pat l)
+  | Call(id, args) -> call_to_lens id args
+  | _ -> raise WrongPatternFormat
 
 %}
 
@@ -41,8 +45,8 @@ let up_pat_to_exp (u : Ast.updatable_pattern) : Ast.exp =
 %token <string> IDENT
 %token <string> CALL // this is identifier followed by a LBRACKET, because disambiguiate we need this
 %token <string> T_UPDATE_MATCH // this is identifier followed by a match operator, we also need it for disambiguiate.
-// %token <string> LABEL
-%token <string> PIN_IDENT
+%token <string> LABEL
+// %token <string> PIN_IDENT
 
 %token LPAREN
 %token RPAREN
@@ -68,6 +72,7 @@ let up_pat_to_exp (u : Ast.updatable_pattern) : Ast.exp =
 %token T_AND
 %token T_OR
 %token T_NOT
+%token T_PIN
 %token T_MATCH
 
 %token DO
@@ -86,20 +91,21 @@ let up_pat_to_exp (u : Ast.updatable_pattern) : Ast.exp =
 
 %token EOF
 
+%right T_MATCH // T_UPDATE_MATCH
 %left T_OR
 %left T_AND
-%right T_MATCH T_UPDATE_MATCH
 %left T_AS
 %left T_EQ T_NE T_LE T_LT T_GE T_GT
 %left T_ADD T_SUB
 %left T_MUL T_DIV
 //%left DOT
 %nonassoc T_NOT
+%nonassoc T_PIN
 
-%type <Ast.exp> program
-%type <Ast.pattern> pattern
-%type <Ast.updatable_pattern> updatable_pattern
-%type <Ast.unary_operator> un_op
+%type <exp> program
+// %type <pattern> pattern
+// %type <updatable_pattern> updatable_pattern
+%type <unary_operator> un_op
 
 %start program
 
@@ -115,18 +121,19 @@ program:
 exp: 
   | IF test=exp _then=no_end_terminated_exps ELSE _else=end_terminated_exps { If(test, _then, _else) }
   | CASE matched=exp body=list(case_param) END { Case(matched, body) }
-  | FUNCTION LPAREN args=separated_list(COMMA, pattern) RPAREN body=end_terminated_exps { 
-    Lam(args, body)
+  | FUNCTION LPAREN args=separated_list(COMMA, exp4) RPAREN body=end_terminated_exps { 
+    Lam(List.map exp_to_pat args, body)
   }
-  | FUNCTION name=IDENT LPAREN args=separated_list(COMMA, pattern) RPAREN body=end_terminated_exps { 
-    Match(Updatable(Bind name), Lam(args, body))
-    (* Call(bin_op_to_str(MATCH), [Val(name); Lam(args, body)]) *)
+  | FUNCTION name=IDENT LPAREN args=separated_list(COMMA, exp4) RPAREN body=end_terminated_exps { 
+    Match(Updatable(Bind name), Lam(List.map exp_to_pat args, body))
   }
   | DO exps=end_terminated_exps { Seq(exps) }
   | exp1 { $1 }
 
 case_param: 
-  | WHEN pat=pattern act=no_end_terminated_exps { (pat, act) }
+  | WHEN pat=exp4 act=no_end_terminated_exps { 
+    (exp_to_pat pat, act) 
+  }
 
 no_end_terminated_exps: 
   | l=list(exp) { l }
@@ -136,22 +143,34 @@ end_terminated_exps:
   | l=list(exp) END { l }
   | COLON e=exp { [e] }
 
-// "Expression-like" expressions, all rules conflicts with do block.
+// update match, not nestable
 exp1: 
-  | pat=updatable_pattern op=T_UPDATE_MATCH rhs=exp1 { 
-    let evaluated = up_pat_to_exp pat in
-      Match(Updatable pat, Call(op, [evaluated; rhs]))
+  | pat=exp4 op=T_UPDATE_MATCH rhs=exp3 { 
+    match exp_to_pat pat with
+    | Updatable u -> Match (Updatable u, Call(op, [pat; rhs]))
+    | _ -> raise WrongPatternFormat
   }
-  | e1=exp1 op=bin_op e2=exp1 { 
-    Call(bin_op_to_str(op), [e1; e2])
-  }
-  | op=un_op e=exp1 { 
-    Call(un_op_to_str(op), [e])
-  }
-  | exp2 { $1 }
+  | exp3 { $1 }
 
-exp2: 
-  | selected=exp2 DOT id=CALL l=separated_list(COMMA, exp) RPAREN { Call(id, l @ [selected]) }
+// "Expression-like" expressions, all rules conflicts with do block.
+exp3: 
+  | pat=exp4 T_MATCH rhs=exp3 {
+    Match(exp_to_pat pat, rhs)
+  }
+  | e1=exp3 op=bin_op e2=exp3 { 
+    Binary(op, e1, e2)
+  }
+  | op=un_op e=exp3 { 
+    Unary(op, e)
+  }
+  | T_PIN id=IDENT {
+    UnPin(id)
+  }
+  | exp4 { $1 }
+
+// Expressions that have higher precedence than DOT
+exp4: 
+  | obj=exp4 DOT _method=CALL args=separated_list(COMMA, exp) RPAREN { Call(_method, args @ [obj]) }
   // above rule conflicts with binary/unary operation
   | id=CALL l=separated_list(COMMA, exp) RPAREN { Call(id, l) }
   | LPAREN first=exp COMMA l=separated_nonempty_list(COMMA, exp) RPAREN { Tuple(first :: l) }
@@ -175,20 +194,21 @@ exp2:
   | T_AND { AND }
   | T_OR { OR }
   | T_AS { AS }
-  //| T_MATCH { MATCH }
+  // | T_MATCH { MATCH }
 
-updatable_pattern: 
-  | id=IDENT { Bind(id) }
-  | target=IDENT DOT id=CALL args=separated_list(COMMA, exp) RPAREN { Lens(target, id, args) }
-  // above rule conflicts with binary/unary operation
-  | id=CALL args=separated_list(COMMA, exp) COMMA target=IDENT RPAREN { Lens(target, id, args) }
+// updatable_pattern: 
+//   | id=IDENT { Bind(id) }
+//   | obj=IDENT DOT _method=CALL args=separated_list(COMMA, exp) RPAREN { Lens(obj, _method, args) }
+//   // above rule conflicts with binary/unary operation
+//   | _method=CALL args=separated_list(COMMA, exp) COMMA obj=IDENT RPAREN { Lens(obj, _method, args) }
 
-pattern: 
-  | u=updatable_pattern { Updatable(u) }
-  | pinned=PIN_IDENT { Pin(pinned) }
-  | LPAREN l=separated_list(COMMA, pattern) RPAREN { PatTuple(l) }
-  | LBRACKET l=separated_list(COMMA, pattern) RBRACKET { PatList(l) }
-  | a=atom { Lit(a) }
+// pattern: 
+//   | u=updatable_pattern { Updatable(u) }
+//   | pinned=PIN_IDENT { Pin(pinned) }
+//   | LPAREN l=separated_list(COMMA, pattern) RPAREN { PatTuple(l) }
+//   | LBRACKET l=separated_list(COMMA, pattern) RBRACKET { PatList(l) }
+//   | a=atom { Lit(a) }
+
 
 atom: 
   // | INT_T { Type TInt }

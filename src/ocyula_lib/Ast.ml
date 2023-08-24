@@ -3,6 +3,12 @@ type ident = string
 type unary_operator = 
      NOT
 
+type binary_operator = 
+   | EQ | NE | LE | LT | GE | GT
+   | ADD | SUB | MUL | DIV
+   | AND | OR
+   | AS (* type annotation *)
+
 type atom = 
    | Int of int
    | F64 of float
@@ -13,8 +19,8 @@ type atom =
 
 type updatable_pattern =
    | Bind of ident (* creates new binding *)
-   | Lens of ident * ident * exp list
-            (* obj . method (arg1, arg2, ...) *) 
+   | Lens of updatable_pattern * ident * exp list
+            (* obj             . method (arg1, arg2, ...) *) 
 
 and pattern = 
    | Updatable of updatable_pattern
@@ -26,6 +32,7 @@ and pattern =
 
 and exp =
    | Atom of atom
+   | UnPin of ident
    | Val of ident 
    | Tuple of exp list
    | List of exp list
@@ -36,5 +43,8 @@ and exp =
    | Case of exp * (pattern * exp list) list
    | Seq of exp list
    | Match of pattern * exp
+   (* builtins *)
+   | Binary of binary_operator * exp * exp
+   | Unary of unary_operator * exp
 
 (* type program = Program of exp list *)
