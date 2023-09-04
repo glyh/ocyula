@@ -12,3 +12,31 @@
 
 
 let () = Ocyula_lib.Main.main ()
+
+(* type 'a t2 =  *)
+(*   | F: int -> int t2 *)
+(*   | G: string * int t2 list -> string t2 *)
+(**)
+(* let rec m (type a) (e: a t2) : a t2 = match e with *)
+(*   | F(i) -> F(i + 1) *)
+(*   | G(_, fs) -> G("", List.map m fs) *)
+(**)
+(* type ('a, 'b) t =  *)
+(*   | F: int -> (int, 'b) t *)
+(*   | G: string * (int, 'b) t list -> (string, 'b) t *)
+(**)
+(* let rec m (type a b) (e: (a, b) t) : (a, b) t = match e with *)
+(*   | F(i) -> F(i + 1) *)
+(*   | G(_, fs) -> G("", List.map m fs) *)
+
+(* let rec map = function *)
+(*   | F(i) -> F(i + 1) *)
+(*   | G(_, fs) -> G("", List.map map fs) *)
+
+(* let rec map: type a b. (a, b) t -> (a, b) t = fun e -> match e with  *)
+(*   | F(i) -> F(i + 1) *)
+(*   | G(_, fs) -> G("", List.map map fs) *)
+(**)
+(* let rec map: type a b. (a, b) t -> (a, b) t = function *)
+(*   | F(i) -> F(i + 1) *)
+(*   | G(_, fs) -> G("", List.map map fs) *)

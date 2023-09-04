@@ -1,6 +1,5 @@
 %{
 open Ast
-
 exception WrongPatternFormat
 
 let rec break_last (l: 'a list) : ('a list * 'a) option = 
@@ -12,24 +11,22 @@ let rec break_last (l: 'a list) : ('a list * 'a) option =
     | Some (l, last) -> Some (x :: l, last)
     | None -> None
 
-let rec call_to_lens (_method : string) (args : exp list) =
-  match break_last args with
-  | Some (but_last, e) -> 
-    begin match exp_to_pat e with
-    | Updatable u ->  Updatable(Lens(u, _method, but_last))
-    | _ -> raise WrongPatternFormat
-    end
-  | _ -> raise WrongPatternFormat
-
-and exp_to_pat (p: exp) : pattern =
-  match p with 
-  | Atom a -> Lit a
-  | UnPin id -> Pin id
-  | Val id -> Updatable (Bind id)
-  | Tuple t -> PatTuple (List.map exp_to_pat t)
-  | List l -> PatList (List.map exp_to_pat l)
-  | Call(id, args) -> call_to_lens id args
-  | _ -> raise WrongPatternFormat
+let rec call_to_lens (_method: string) (args: (exp, top) gen_ast list) = match break_last args with
+   | Some (but_last, last) -> 
+      begin match exp_to_pat last with
+      | Updatable u -> Updatable(Lens(u, _method, but_last))
+      | _ -> raise WrongPatternFormat
+      end
+   | _ -> raise WrongPatternFormat
+and exp_to_pat (e: (exp, top) gen_ast) = 
+   match e with
+   | Atom a -> Lit a
+   | UnPin id -> Pin id
+   | Val id -> Updatable(Bind id)
+   | Tuple t -> PatTuple (List.map exp_to_pat t)
+   | List l -> PatList (List.map exp_to_pat l)
+   | Call(id, args) -> call_to_lens id args
+   | _ -> raise WrongPatternFormat
 
 %}
 
@@ -98,7 +95,7 @@ and exp_to_pat (p: exp) : pattern =
 %nonassoc T_NOT
 %nonassoc T_PIN
 
-%type <exp> program
+%type <(exp, top) gen_ast> program
 %type <unary_operator> un_op
 
 %start program
@@ -115,17 +112,17 @@ program:
 
 // Satement-like expressions
 exp: 
-  | IF test=exp _then=no_end_terminated_exps ELSE _else=end_terminated_exps { If(test, _then, _else) }
+  | IF test=exp _then=no_end_terminated_exps ELSE _else=end_terminated_exps { IfSeq(test, _then, _else) }
   | MATCH matched=exp4 branches=list(case_param) ow=option(else_branch) END { 
     match ow with 
-    | Some(ow) -> CaseMatch(matched, branches @ [ow]) 
-    | None -> CaseMatch(matched, branches) 
+    | Some(ow) -> CaseMatchSeq(matched, branches @ [ow]) 
+    | None -> CaseMatchSeq(matched, branches) 
   }
   | FUNCTION LPAREN args=separated_list(COMMA, exp4) RPAREN body=end_terminated_exps { 
-    Lam(List.map exp_to_pat args, body)
+    LamPatSeq(List.map exp_to_pat args, body)
   }
   | FUNCTION name=IDENT LPAREN args=separated_list(COMMA, exp4) RPAREN body=end_terminated_exps { 
-    Match(Updatable(Bind name), Lam(List.map exp_to_pat args, body))
+    Match(Updatable(Bind name), LamPatSeq(List.map exp_to_pat args, body))
   }
   | DO exps=end_terminated_exps { Seq(exps) }
   | exp1 { $1 }
@@ -142,7 +139,7 @@ guard:
 
 else_branch: 
   | ELSE act=no_end_terminated_exps {
-    (Any, Atom (Bool true), act)
+    (Any(), Atom (Bool true), act)
   }
 
 no_end_terminated_exps: 

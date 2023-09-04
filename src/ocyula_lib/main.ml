@@ -28,11 +28,4 @@ let parse s =
   with Parser.Error ->
     raise (Failure ("Parse error at" ^ (pos_string lexbuf.lex_curr_p)))
 
-let global_ty_env = Type.TypeEnv.empty ()
-
-let main () = 
-  let input = read_stdin() in 
-  let parsed = parse input in 
-  let desugarred = Desugar.desugar parsed in
-  let _typechecked = Type.infer_and_generalize global_ty_env desugarred in
-    raise Unimplemented
+let main () = ()
