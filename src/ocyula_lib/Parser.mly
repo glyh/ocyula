@@ -117,8 +117,8 @@ exp:
   | IF test=exp _then=no_end_terminated_exps ELSE _else=end_terminated_exps { If(test, Seq(_then), Seq(_else)) }
   | MATCH matched=exp4 branches=list(case_param) ow=option(else_branch) END { 
     match ow with 
-    | Some(ow) -> CaseMatch(matched, Seq(branches @ [ow])) 
-    | None -> CaseMatch(matched, Seq(branches))
+    | Some(ow) -> CaseMatch(matched, branches @ [ow]) 
+    | None -> CaseMatch(matched, branches) 
   }
   | FUNCTION LPAREN args=separated_list(COMMA, exp4) RPAREN body=end_terminated_exps { 
     Lambda(List.map exp_to_pat args, Seq(body))
@@ -132,8 +132,8 @@ exp:
 case_param: 
   | CASE pat=exp4 g=option(guard) act=no_end_terminated_exps { 
     match g with 
-    | Some(g) -> (exp_to_pat pat, g, act) 
-    | None -> (exp_to_pat pat, Lit (Bool true), act)
+    | Some(g) -> (exp_to_pat pat, g, Seq act) 
+    | None -> (exp_to_pat pat, Lit (Bool true), Seq act)
   }
 
 guard: 
@@ -141,7 +141,7 @@ guard:
 
 else_branch: 
   | ELSE act=no_end_terminated_exps {
-    (PAny, Lit (Bool true), act)
+    (PAny, Lit (Bool true), Seq act)
   }
 
 no_end_terminated_exps: 
