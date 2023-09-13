@@ -1,157 +1,319 @@
-(* TODO: rewrite everything, this is BIDI, doesn't quite work with HM type inference. *)
-exception Unimplemented
+(* this is Hindley-Milner type inference algorithm, one day I need to replace it with some other algorithm to support dependent types *)
 
-type reason = 
-   | Unbound of int
-   | Mismatch of term * term
-   | Uninferable of term
-   | Uncheckable
-   | CantApplyNonFunction of term * term
-and term = 
-   | TyType
-   | TyBool
-   | TyPi of term * term
-   | TySigma of term * term (* like Pi type, we also use debrujin index here. yes this is a dependent type pair *)
-   | Var of int (* de Brujin Index *)
-   | Lam of term
-   | App of term * term
-   | Ann of term * ty
-   | LitBool of bool
-   | If of term * term * term
-   | Prod of term * term
-   (* we use 0 for y, 1 for x, i.e. [(x, y) -> a]λx.λy.b *)
-   | LetPair of term * term
-and ty = term
+(* open Ast *)
+(* dep cycle, need to spit type def and type check *)
 
-exception PreCondViolation
-let rec to_base_x (x: int) (i: int) =
-   if i < 0 || x <= 0 then 
-      raise PreCondViolation
-   else if i < x then
-      [i]
-   else 
-      i mod x :: (to_base_x x (i / x))
-
-let gensym i = 
-   let syms = to_base_x 26 i in
-      syms 
-      |> List.map (fun i -> char_of_int ((int_of_char 'a') + i - 1))
-      |> List.to_seq
-      |> String.of_seq
-
-type ctx = term list (* here we're using de Brujin's index to refer to binding variables *)
-
-let rec show_ctx (t: term) (ctx: string list) (i: int) : string = 
-   let f = fun t -> show_ctx t ctx i in
-   match t with
-   | TyType -> "type"
-   | Var(i) -> 
-      if i < List.length ctx
-      then List.nth ctx i
-      else "u" ^ string_of_int i
-   | Lam(t) -> 
-      let v = gensym i in
-      "λ" ^ v ^ (show_ctx t (v :: ctx) (i + 1)) 
-   | App(g, x) ->
-      (f g) ^ " " ^ (f x)
-   | TyPi(a, b) -> 
-      let v = gensym i in
-      "("^ v ^ ":" ^ (f a) ^ ")->" ^ (show_ctx b (v::ctx) (i + 1)) 
-   | Ann(a, b) -> 
-      "(" ^ (f a) ^ ":" ^ (f b) ^ ")"
-   | TyBool -> "bool"
-   | LitBool(true) -> "true" 
-   | LitBool(false) -> "false" 
-   | If(cond, true_branch, false_branch) -> 
-      "(if " ^ (f cond) ^  " do " 
-         ^ (f true_branch) ^ 
-      " else " 
-         ^ (f false_branch) ^ 
-      " end)"
-   | _ -> raise Unimplemented
-
-let show (t: term) = 
-   show_ctx t [] 0
-
-let rec shift_c (t: term) d c = 
-   match t with
-   | Var(i) -> Var(if i < c then i else i + d)
-   | Lam(t) -> Lam(shift_c t d (c + 1))
-   | App(f, x) -> App(shift_c f d c, shift_c x d c)
-   | TyPi(a, b) -> TyPi(shift_c a d c, shift_c b d (c+1)) (* note that b here is bounded by x *)
-   | TySigma(a, b) -> TySigma(shift_c a d c, shift_c b d (c+1))
-   | Ann(e, t) -> Ann(shift_c e d c, shift_c t d c)
-   | If(test, t, f) -> If(shift_c test d c, shift_c t d c, shift_c f d c)
-   | Prod(lhs, rhs) -> Prod(shift_c lhs d c, shift_c rhs d c)
-   | TyType | TyBool | LitBool _ as e -> e
-
-let shift (t: term) d = shift_c t d 0
-
-let rec subst_one (target: term) (var: int) (by: term) : term =
-   match target with
-   | TyType | TyBool | LitBool _ as e -> e
-   | Var i ->
-      if var == i then by else Var i
-   | Lam body ->
-      Lam(subst_one body (var + 1) (shift by 1))
-   | App(f, x) -> 
-      App(subst_one f var by, subst_one x var by)
-   | TyPi(a, b) -> 
-      TyPi(subst_one a var by, subst_one b (var + 1) (shift by 1))
-   | Ann(e, t) -> 
-      Ann(subst_one e var by, subst_one t var by)
-   | TySigma(a, b) -> 
-      TySigma(subst_one a var by, subst_one b (var + 1) (shift by 1))
-   | If(test, t, f) ->
-      If(subst_one test var by, subst_one t var by, subst_one f var by)
-   | Prod(lhs, rhs) -> 
-      Prod(subst_one lhs var by, subst_one rhs var by)
-
-exception TypeError of reason
-
-let (=*=) (lhs: ty) rhs =
-   lhs = rhs
-
-(* we're using de Brujin Index so there won't be aliasing issue *)
-let rec check_type tm ty (ctx: ctx) : unit = match (tm, ty) with 
-   | Lam(inner), TyPi(a, b) -> 
-      check_type inner b (a :: ctx)
-   | Prod(x, y), TySigma(a, b) -> 
-      check_type x a ctx;
-      check_type y (subst_one b 0 x) ctx
-   | If(test, t, f), ty -> (* on ref implementation this is a checking rule rather than inference rule *)
-      check_type test TyBool ctx;
-      check_type t ty ctx;
-      check_type f ty ctx
-   | LetPair(a, b), ty -> 
-      _ -> raise Unimplemented
-   | any, ty -> 
-      let ty2 = infer_type any ctx in
-         if not (ty2 =*= ty)
-         then raise (TypeError(Mismatch(ty, ty2)))
-         else ()
-and infer_type (tm: term) (ctx: ctx) : ty = match tm with 
-   | TyType | TyBool -> TyType
-   | TyPi(a, b) | TySigma(a, b) -> 
-      check_type a TyType ctx;
-      (* WARN: here we don't really evaluate b to normal form so I suspect there's a problem with the algorithm *)
-      check_type b TyType (a :: ctx);
-      TyType
-   | Var(i) -> 
-      if i >= List.length ctx 
-      then raise (TypeError (Unbound i))
-      else List.nth ctx i
-   | App(f, x) ->
-      begin match infer_type f ctx with
-      | TyPi(a, b) -> 
-         check_type x a ctx;
-         subst_one b 0 x
-      | t -> raise (TypeError(CantApplyNonFunction(f, t)))
-      end
-   | Ann(e, ty) ->
-      check_type ty TyType ctx;
-      check_type e ty ctx;
-      ty
-   (* so for now we have to annotate any lambdas *)
-   | LitBool _ -> TyBool
-   | Lam _ | Prod _ | If _ | LetPair _ -> raise (TypeError(Uninferable tm))
+(* type 'a updatable =  *)
+(*    | Bind of ident * 'a *)
+(*    | Lens of 'a updatable * ident * 'a exp list * 'a *)
+(*              (* obj    . method  (arg1, arg2, ...) *) *)
+(* and 'a pat =  *)
+(*    | Updatable of 'a updatable * 'a *)
+(*    | Union of 'a pat list * 'a *)
+(*    | With of 'a pat * 'a exp * 'a *)
+(*    (* NOTE: *)
+(*       we have some ADT: *)
+(*       type f =  *)
+(*       | Left of int *)
+(*       | Right of unit *)
+(*       Left i | Right () with (i = 3) = Right() *)
+(*       exists solely for balancing the variables on both side of a union pattern *)
+(*    *) *)
+(*    | Pin of ident * 'a *)
+(*    | PatTuple of 'a pat list * 'a *)
+(*    | PatList of 'a pat list * 'a *)
+(*    | PLit of atom * 'a *)
+(*    | PAny of 'a *)
+(**)
+(* and 'a exp =  *)
+(*    | Assert of 'a exp * 'a *)
+(*    | Val of ident * 'a *)
+(*    | Lit of atom * 'a *)
+(*    | Bin of 'a exp * bin_op * 'a exp * 'a *)
+(*    | Un of un_op * 'a exp * 'a *)
+(*    | Seq of 'a exp list * 'a *)
+(*    | If of 'a exp * 'a exp * 'a exp * 'a *)
+(*    | Tuple of 'a exp list * 'a *)
+(*    | List of 'a exp list * 'a *)
+(*    | Lambda of ident list * 'a exp * 'a *)
+(*    | Call of ident * 'a exp list * 'a *)
+(*    | BindStmt of ident * 'a exp * 'a *)
+(*    | KthTuple of 'a exp * int * 'a (* we may remove this from primitives later if we have a dependent type system *) *)
+(*    | UnPin of ident * 'a (* refer to the previous definition, rather than the closest*) *)
+(*    | CaseMatch of 'a exp * ('a pat * 'a exp * 'a exp) list * 'a *)
+(*    | Annotate of 'a exp * Type.ty * 'a *)
+(**)
+(* type type_var = string *)
+(**)
+(* type cmp_res = LT | GT | EQ *)
+(**)
+(* let compare l r =  *)
+(*    if l < r then LT  *)
+(*    else if l = r then EQ  *)
+(*    else GT *)
+(**)
+(* type ident = string *)
+(**)
+(* module FVSet = Set.Make(String) *)
+(* module TypeEnv = CCPersistentHashtbl.Make(struct *)
+(*    type t = ident *)
+(*    let equal s t = s = t *)
+(*    let hash = Hashtbl.hash *)
+(* end) *)
+(**)
+(* type unify_error_reason =  *)
+(*      InfiniteSubstitution *)
+(*    | TupleLengthMismatch *)
+(*    | CantUnifyBetween of ty * ty *)
+(* exception UnifyError of unify_error_reason *)
+(**)
+(* type type_env = ty TypeEnv.t *)
+(**)
+(* let tyUnit = TTuple [] *)
+(**)
+(* type ty_constraint = ty * ty *)
+(* type ty_constraints = ty_constraint list *)
+(**)
+(* type exp_untyped = DeBindMatch.exp *)
+(* type exp_typed = ty exp *)
+(**)
+(* let take_annotated_type (e : exp_typed) : ty = *)
+(*    match e with *)
+(*    | Lit(_, t) | Assert(_, t) | Val(_, t) | Bin(_, _, _, t)  *)
+(*    | If(_, _, _, t) | List(_, t) | Call(_, _, t) | BindStmt(_, _, t)  *)
+(*    | Seq(_, t) | Tuple(_, t) | KthTuple(_, _, t) | CaseMatch(_, _, t)  *)
+(*    | Annotate(_, _, t) | Un(_, _, t) | Lambda(_, _, t) | UnPin(_, t) *)
+(*    -> t *)
+(**)
+(* (* let put_annotated_type (e: exp_typed) (ty: ty) : exp_typed =  *) *)
+(* (*    match e with *) *)
+(* (*    | Lit(l, _) -> Lit(l, ty)  *) *)
+(* (*    | Assert(e, _) -> Assert(e, ty)  *) *)
+(* (*    | Val(v, _) -> Val(v, ty)  *) *)
+(* (*    | Bin(a, op, b, _) -> Bin(a, op, b, ty)  *) *)
+(* (*    | If(_, _, _, t) | List(_, t) | Call(_, _, t) | BindStmt(_, _, t)  *) *)
+(* (*    | Seq(_, t) | Tuple(_, t) | KthTuple(_, _, t) | CaseMatch(_, _, t)  *) *)
+(* (*    | Annotate(_, _, t) | Un(_, _, t) | Lambda(_, _, t) | UnPin(_, t) *) *)
+(* (*    -> t *) *)
+(**)
+(**)
+(* (* let rec free_variables (t: ty) : FVSet.t = *) *)
+(* (*    match t with *) *)
+(* (*    | TyVar(v) -> FVSet.singleton v *) *)
+(* (*    | TyTuple(l) ->  *) *)
+(* (*       let sets = List.map free_variables l in *) *)
+(* (*          List.fold_right FVSet.union sets FVSet.empty *) *)
+(* (*    | TyList t -> free_variables t *) *)
+(* (*    | TyLam(param, ret) ->  *) *)
+(* (*       FVSet.union (free_variables param) (free_variables ret) *) *)
+(* (*    | TyForAll(fv, inner) -> *) *)
+(* (*       FVSet.remove fv (free_variables inner) *) *)
+(* (*    | _ -> FVSet.empty *) *)
+(* (**) *)
+(* (* let free_variables_env (env: type_env) : FVSet.t = *) *)
+(* (*    TypeEnv.fold (fun s _ t -> FVSet.union s (free_variables t)) FVSet.empty env *) *)
+(* (**) *)
+(* (* let occurs (v : type_var) (t: ty) = *) *)
+(* (*    FVSet.mem v (free_variables t) *) *)
+(* (**) *)
+(* (* type subst = (type_var * ty) list *) *)
+(* (**) *)
+(* (* let subst_on_typ (sub: subst) (t: ty) : ty =  *) *)
+(* (*    let rec sub1 s in_ty = *) *)
+(* (*       let (tyvar, to_ty) = s in *) *)
+(* (*          match in_ty with *) *)
+(* (*          | TyVar(v) when v = tyvar -> to_ty *) *)
+(* (*          | TyTuple(l) -> TyTuple(List.map (sub1 s) l) *) *)
+(* (*          | TyList t -> TyList (sub1 s t) *) *)
+(* (*          | TyLam(param, ret) -> TyLam (sub1 s param, sub1 s ret) *) *)
+(* (*          | TyForAll(fv, inner) when tyvar != fv -> *) *)
+(* (*             TyForAll(fv, sub1 s inner) *) *)
+(* (*          | any -> any *) *)
+(* (*    in *) *)
+(* (*    List.fold_right sub1 sub t  *) *)
+(* (**) *)
+(* (* let subst_on_subst (src: subst) (dest: subst) : subst = *) *)
+(* (*    List.map (fun (id, ty) -> (id, subst_on_typ src ty)) dest *) *)
+(* (**) *)
+(* (* let subst_on_constraints (sub: subst) (cs: ty_constraints) : ty_constraints =  *) *)
+(* (*    List.map (fun (t1, t2) -> (subst_on_typ sub t1, subst_on_typ sub t2)) cs *) *)
+(* (**) *)
+(* (* let subst_on_env (sub: subst) (env: type_env) : type_env =  *) *)
+(* (*    TypeEnv.map (fun _ t -> subst_on_typ sub t) env *) *)
+(* (**) *)
+(* (* let rec subst_on_exp_annotated (sub: subst) (e : exp_core_annotated) : exp_core_annotated = *) *)
+(* (*    let subt = subst_on_typ sub in *) *)
+(* (*    let sube = subst_on_exp_annotated sub in  *) *)
+(* (*    match e with *) *)
+(* (*    | Atom(v, t) -> Atom(v, subt t) *) *)
+(* (*    | Val(id, t) -> Val(id, subt t) *) *)
+(* (*    | Tuple(es, t) ->  *) *)
+(* (*       Tuple(List.map sube es, subt t) *) *)
+(* (*    | List(es, t) ->  *) *)
+(* (*       List(List.map sube es, subt t) *) *)
+(* (*    | Let (id, exp, body, t) ->  *) *)
+(* (*       Let(id, sube exp, sube body, subt t) *) *)
+(* (*    (* | If (cond, _then, _else, t) ->  *) *) *)
+(* (*    (*    If(sube cond, sube _then, sube _else, subt t) *) *) *)
+(* (*    | App (f, x, t) -> *) *)
+(* (*       App(sube f, sube x, subt t) *) *)
+(* (*    | Lam (id, body, t) -> *) *)
+(* (*       Lam(id, sube body, subt t) *) *)
+(* (*    | Try (tried, fail, t) -> *) *)
+(* (*       Try(sube tried, sube fail, subt t) *) *)
+(* (*    | Seq (es, t) -> *) *)
+(* (*       Seq (List.map sube es, subt t) *) *)
+(* (**) *)
+(* (* (* compose_subst(sub2, sub1) ty = sub2(sub1(ty)) *) *) *)
+(* (* let compose_subst (sub2: subst) (sub1: subst) : subst =  *) *)
+(* (*    sub2 @ (subst_on_subst sub2 sub1)  *) *)
+(* (**) *)
+(* (* let gensym =  *) *)
+(* (*    let count = ref 0 in  *) *)
+(* (*    let next () = count := !count + 1; !count *) *)
+(* (*    in fun prefix -> prefix ^ string_of_int (next ()) *) *)
+(* (**) *)
+(* (* let instantiate (ty: ty) : ty = *) *)
+(* (*    match ty with  *) *)
+(* (*    | TyForAll(v, inner) ->  *) *)
+(* (*       let instantiate = gensym ("instantiate_" ^ v) in *) *)
+(* (*          subst_on_typ [(v, TyVar instantiate)] inner *) *)
+(* (*    | _ -> ty *) *)
+(* (**) *)
+(* (* let rec unify_one (c: ty_constraint) : subst =  *) *)
+(* (*    match c with *) *)
+(* (*    | (TyVar(v1), t2) -> *) *)
+(* (*       if occurs v1 t2 then *) *)
+(* (*          raise (UnifyError InfiniteSubstitution) *) *)
+(* (*       else *) *)
+(* (*          [(v1, t2)] *) *)
+(* (*    | (t1, TyVar(v2)) -> *) *)
+(* (*       if occurs v2 t1 then *) *)
+(* (*          raise (UnifyError InfiniteSubstitution) *) *)
+(* (*       else *) *)
+(* (*          [(v2, t1)] *) *)
+(* (*    | (TyTuple t1s, TyTuple t2s) -> *) *)
+(* (*       if List.length t1s = List.length t2s then *) *)
+(* (*          unify (List.combine t1s t2s) *) *)
+(* (*       else *) *)
+(* (*          raise (UnifyError TupleLengthMismatch) *) *)
+(* (*    | (TyList t1, TyList t2) -> *) *)
+(* (*       unify_one (t1, t2) *) *)
+(* (*    | (TyLam (p1, r1), TyLam (p2, r2)) -> *) *)
+(* (*       compose_subst  *) *)
+(* (*          (unify_one (p1, p2)) *) *)
+(* (*          (unify_one (r1, r2)) *) *)
+(* (*    | (TyForAll (v, inner), rhs) -> *) *)
+(* (*       unify_one ((instantiate (TyForAll (v, inner))), rhs) *) *)
+(* (*    | (lhs, TyForAll (v, inner)) -> *) *)
+(* (*       unify_one (lhs, (instantiate (TyForAll (v, inner)))) *) *)
+(* (*    | (lhs, rhs) ->  *) *)
+(* (*       if lhs = rhs  *) *)
+(* (*       then [] *) *)
+(* (*       else raise (UnifyError (CantUnifyBetween(lhs, rhs))) *) *)
+(* (**) *)
+(* (* and unify (cs: ty_constraints): subst =  *) *)
+(* (*    match cs with  *) *)
+(* (*    | [] -> [] *) *)
+(* (*    | c :: rest ->  *) *)
+(* (*       let c_subst = unify_one c in *) *)
+(* (*          (* there's no need to use compose here, as we already subsitute on the constratints as a whole *) *) *)
+(* (*          (unify (subst_on_constraints c_subst rest)) @ c_subst *) *)
+(* (**) *)
+(* (* let generalize (env : type_env) (ty : ty) (cons: ty_constraints): ty =  *) *)
+(* (*    (* Cons is the contraint we got by inferring some expression,  *) *)
+(* (*       ty is the type returned.  *) *)
+(* (*       What we need to do now is to *) *) *)
+(* (*    let subst = unify cons in *) *)
+(* (*    let env_inferred = subst_on_env subst env in *) *)
+(* (*    let ty_subst = subst_on_typ subst ty in  *) *)
+(* (*    (* Any free variables in the substituted type but not in the substituted environment are variables  *) *)
+(* (*       that can't be inferred, we need to generalize, *) *)
+(* (*       we are free to reuse the constraints *) *) *)
+(* (*    let fvs = FVSet.diff (free_variables ty_subst) (free_variables_env env_inferred) in *) *)
+(* (*       FVSet.fold (fun id ty -> TyForAll(id, ty)) fvs ty_subst *) *)
+(* (**) *)
+(* (* let rec infer_constraints (env: type_env) (exp : exp_core_input) : (exp_core_annotated * ty_constraints) =  *) *)
+(* (*    match exp with  *) *)
+(* (*    | Atom (Bool b, _) -> Atom (Bool b, TyBool), [] *) *)
+(* (*    | Atom (Int i, _) -> Atom (Int i, TyInt), [] *) *)
+(* (*    | Atom (F64 f, _) -> Atom (F64 f, TyF64), [] *) *)
+(* (*    | Atom (Str s, _) -> Atom (Str s, TyStr), [] *) *)
+(* (*    | Atom (Keyword k, _) -> Atom (Keyword k, TyKeyword), [] *) *)
+(* (*    | Val (id, _) ->  *) *)
+(* (*       Val (id, TyVar (gensym ("var_" ^ id))), [] *) *)
+(* (*    | Tuple (exps, _) -> *) *)
+(* (*       let exps, constraints_list = List.map (infer_constraints env) exps |> List.split in *) *)
+(* (*       let inner_tys = List.map take_annotated_type exps in *) *)
+(* (*       let constraints = List.concat constraints_list in *) *)
+(* (*       Tuple (exps, TyTuple inner_tys), constraints *) *)
+(* (*    | List (exps, _) ->  *) *)
+(* (*       let exps, constraints_list = List.map (infer_constraints env) exps |> List.split in *) *)
+(* (*       let inner_tys = List.map take_annotated_type exps in *) *)
+(* (*       let constraints = List.concat constraints_list in *) *)
+(* (*       begin match inner_tys with *) *)
+(* (*       | [] ->  *) *)
+(* (*          let f = gensym "list" in *) *)
+(* (*             List (exps, (TyList (TyVar f))), constraints *) *)
+(* (*       | [only] ->  *) *)
+(* (*          List (exps, TyList only), constraints *) *)
+(* (*       | first :: rest ->  *) *)
+(* (*          List (exps, TyList first), constraints @ (List.map (fun ty -> ty, first) rest)  *) *)
+(* (*       end *) *)
+(* (*    | Let (id, bind, inner, _) ->  *) *)
+(* (*       let bind, bind_cons = infer_constraints env bind in *) *)
+(* (*       let bind_ty = take_annotated_type bind in *) *)
+(* (*       let bind_ty_generalize = generalize env bind_ty bind_cons in *) *)
+(* (*       let env_bind = TypeEnv.add env id bind_ty_generalize in *) *)
+(* (*       let bind_generalized = put_annotated_type bind bind_ty_generalize in *) *)
+(* (*       let inner, inner_cons = infer_constraints env_bind inner in *) *)
+(* (*          Let (id, bind_generalized, inner, take_annotated_type inner), bind_cons @ inner_cons *) *)
+(* (*    | If (_test, _then, _else, _) -> *) *)
+(* (*       let _test, test_constraint = infer_constraints env _test in *) *)
+(* (*       let ty_test = take_annotated_type _test in *) *)
+(* (*       let _then, then_constraint = infer_constraints env _then in *) *)
+(* (*       let ty_then = take_annotated_type _then in *) *)
+(* (*       let _else, else_constraint = infer_constraints env _else in *) *)
+(* (*       let ty_else = take_annotated_type _else in *) *)
+(* (*          If (_test, _then, _else, ty_then),  *) *)
+(* (*          test_constraint @  *) *)
+(* (*          then_constraint @  *) *)
+(* (*          else_constraint @ *) *)
+(* (*          [ty_test, TyBool; ty_then, ty_else] *) *)
+(* (*    | App (fn, par, _) -> *) *)
+(* (*       let fn, fn_cons = infer_constraints env fn in *) *)
+(* (*       let ty_fn = take_annotated_type fn in *) *)
+(* (*       let par, par_cons = infer_constraints env par in  *) *)
+(* (*       let ty_par = take_annotated_type par in *) *)
+(* (*       let out = gensym "app_ret" in *) *)
+(* (*          App (fn, par, TyVar out),  *) *)
+(* (*          fn_cons @ par_cons @ [ty_fn, TyLam(ty_par, (TyVar out))] *) *)
+(* (*    | Lam (param, body, _) -> *) *)
+(* (*       let param_ty = TyVar (gensym ("lam_param" ^ param)) in *) *)
+(* (*       let env_updated = TypeEnv.add env param param_ty in *) *)
+(* (*       let body, body_cons = infer_constraints env_updated body in *) *)
+(* (*       let ty_body = take_annotated_type body in *) *)
+(* (*          Lam (param, body, TyLam (param_ty, ty_body)), body_cons *) *)
+(* (*    | Try (_try, _catch, _) -> *) *)
+(* (*       let _try, try_constraint = infer_constraints env _try in *) *)
+(* (*       let ty_try = take_annotated_type _try in *) *)
+(* (*       let _catch, catch_constraints = infer_constraints env _catch in *) *)
+(* (*       let ty_catch = take_annotated_type _catch in *) *)
+(* (*          Try (_try, _catch, ty_try),  *) *)
+(* (*          try_constraint @ *) *)
+(* (*          catch_constraints @ *) *)
+(* (*          [ty_try, ty_catch] *) *)
+(* (*    | Seq (exps, _) -> *) *)
+(* (*       let exps, constraints_list = List.map (infer_constraints env) exps |> List.split in *) *)
+(* (*       let inner_tys = List.map take_annotated_type exps in *) *)
+(* (*       let constraints = List.concat constraints_list in *) *)
+(* (*          if List.length exps = 0  *) *)
+(* (*          then Tuple ([], tyUnit), constraints *) *)
+(* (*          else Seq (exps, inner_tys |> List.rev |> List.hd), constraints *) *)
+(* (**) *)
+(* (* let infer_and_generalize (env: type_env) (exp: exp_core_input) : exp_core_annotated =  *) *)
+(* (*    let annotated, cons = infer_constraints env exp in *) *)
+(* (*    let ty_annotated = take_annotated_type annotated in   *) *)
+(* (*    let ty_generalized = generalize env ty_annotated cons in *) *)
+(* (*    let annotated_generalized = put_annotated_type annotated ty_generalized in *) *)
+(* (*       annotated_generalized  *) *)
