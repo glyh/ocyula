@@ -13,14 +13,14 @@ let rec break_last (l: 'a list) : ('a list * 'a) option =
     | None -> None
     end
 
-let rec call_to_lens (_method: ident) (args: exp list) = match break_last args with
+let rec call_to_lens (_method: top id_t) (args: top exp_t list) = match break_last args with
    | Some (but_last, last) -> 
       begin match exp_to_pat last with
       | Updatable u -> Updatable(Lens(u, _method, but_last))
       | _ -> raise WrongPatternFormat
       end
    | _ -> raise WrongPatternFormat
-and exp_to_pat (e: exp) = 
+and exp_to_pat (e: top exp_t) = 
    match e with
    | Lit a -> PLit a
    | UnPin id -> Pin id
@@ -97,7 +97,7 @@ and exp_to_pat (e: exp) =
 %nonassoc T_NOT
 %nonassoc T_PIN
 
-%type <exp> program
+%type <top exp_t> program
 //%type <unary_operator> un_op
 
 %start program
@@ -114,17 +114,19 @@ program:
 
 // Satement-like expressions
 exp: 
-  | IF test=exp _then=no_end_terminated_exps ELSE _else=end_terminated_exps { If(test, Seq(_then), Seq(_else)) }
+  | IF test=exp _then=no_end_terminated_exps ELSE _else=end_terminated_exps { IfSeq(test, _then, _else) }
   | MATCH matched=exp4 branches=list(case_param) ow=option(else_branch) END { 
     match ow with 
-    | Some(ow) -> CaseMatch(matched, branches @ [ow]) 
-    | None -> CaseMatch(matched, branches) 
+    | Some(ow) -> CaseMatchSeq(matched, branches @ [ow]) 
+    | None -> CaseMatchSeq(matched, branches) 
   }
   | FUNCTION LPAREN args=separated_list(COMMA, exp4) RPAREN body=end_terminated_exps { 
-    Lambda(List.map exp_to_pat args, Seq(body))
+    LamPatSeq(List.map exp_to_pat args, body)
   }
   | FUNCTION name=IDENT LPAREN args=separated_list(COMMA, exp4) RPAREN body=end_terminated_exps { 
-    BindMatch(Updatable(Bind (Concrete name)), Lambda(List.map exp_to_pat args, Seq(body)))
+    BindMatch(
+      Updatable(Bind (Concrete name)), 
+      LamPatSeq(List.map exp_to_pat args, body))
   }
   | DO exps=end_terminated_exps { Seq(exps) }
   | exp1 { $1 }
@@ -132,8 +134,8 @@ exp:
 case_param: 
   | CASE pat=exp4 g=option(guard) act=no_end_terminated_exps { 
     match g with 
-    | Some(g) -> (exp_to_pat pat, g, Seq act) 
-    | None -> (exp_to_pat pat, Lit (Bool true), Seq act)
+    | Some(g) -> (exp_to_pat pat, g, act) 
+    | None -> (exp_to_pat pat, Lit (Bool true), act)
   }
 
 guard: 
@@ -141,7 +143,7 @@ guard:
 
 else_branch: 
   | ELSE act=no_end_terminated_exps {
-    (PAny, Lit (Bool true), Seq act)
+    (PAny(), Lit (Bool true), act)
   }
 
 no_end_terminated_exps: 
@@ -167,10 +169,10 @@ exp3:
     BindMatch(exp_to_pat pat, rhs)
   }
   | e1=exp3 op=bin_op e2=exp3 { 
-    Bin(e1, op, e2)
+    Binary(op, e1, e2)
   }
   | op=un_op e=exp3 { 
-    Un(op, e)
+    Unary(op, e)
   }
   | T_PIN id=IDENT {
     UnPin(Concrete id)
